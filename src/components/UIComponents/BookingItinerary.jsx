@@ -1,12 +1,31 @@
 import { motion } from 'framer-motion'
-import { Plane, Clock, Ticket, Mail, DollarSign } from 'lucide-react'
+import { Plane, Ticket, Mail, DollarSign, Armchair } from 'lucide-react'
 import { formatTime, formatDate, getStatusBg, formatPrice } from '../../utils/formatters'
 import CopyPnrButton from './CopyPnrButton'
 import ReservationQuickActions from './ReservationQuickActions'
+import TicketExpiryInfo from './TicketExpiryInfo'
+
+function getPassengerSeat(passenger) {
+  if (!passenger) return null
+  if (passenger.seatCode) return passenger.seatCode
+  if (passenger.seat) return passenger.seat
+  if (Array.isArray(passenger.seats) && passenger.seats.length > 0) {
+    const s = passenger.seats[0]
+    return s?.seatCode || s?.code || s?.number || null
+  }
+  return null
+}
+
+function formatAirportLine(code, city) {
+  if (!code) return '—'
+  if (city?.trim()) return `${code} (${city.trim()})`
+  return code
+}
 
 export default function BookingItinerary({ data, handlers }) {
   if (!data) return null
   const summary = data.ai_summary || null
+  const primaryFlight = data.segments?.[0]?.flightNumber
 
   return (
     <motion.div
@@ -22,21 +41,22 @@ export default function BookingItinerary({ data, handlers }) {
               <span>
                 Ticketed:{' '}
                 <span className="font-medium text-[var(--text-primary)]">
-                  {data.isTicketed != null ? (data.isTicketed ? 'Yes' : 'No') : summary?.isTicketed ? 'Yes' : 'No'}
+                  {data.isTicketed != null
+                    ? data.isTicketed
+                      ? 'Yes'
+                      : 'No'
+                    : summary?.isTicketed
+                      ? 'Yes'
+                      : 'No'}
                 </span>
               </span>
             </div>
-            {data.expireDate || summary?.expireDate ? (
-              <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                <Clock className="h-4 w-4 text-[var(--accent)]" />
-                <span>
-                  Expires:{' '}
-                  <span className="font-medium text-[var(--text-primary)]">
-                    {data.expireDate || summary?.expireDate}
-                  </span>
-                </span>
-              </div>
-            ) : null}
+            {(data.expireDate || summary?.expireDate || data.timeToTicket) && (
+              <TicketExpiryInfo
+                expireDate={data.expireDate || summary?.expireDate}
+                timeToTicket={data.timeToTicket}
+              />
+            )}
           </div>
 
           {data.total_price || summary?.total_price ? (
@@ -45,7 +65,10 @@ export default function BookingItinerary({ data, handlers }) {
               <span>
                 Total:{' '}
                 <span className="font-medium text-[var(--accent)]">
-                  {formatPrice(data.total_price || summary.total_price, data.currency || summary.currency || 'ETB')}
+                  {formatPrice(
+                    data.total_price || summary.total_price,
+                    data.currency || summary.currency || 'ETB',
+                  )}
                 </span>
               </span>
             </div>
@@ -79,13 +102,31 @@ export default function BookingItinerary({ data, handlers }) {
         <p className="mb-2 text-xs font-medium uppercase text-[var(--text-secondary)]">
           Passengers
         </p>
-        <ul className="space-y-1">
-          {data.passengers?.map((p, i) => (
-            <li key={i} className="text-sm">
-              {p.name}{' '}
-              <span className="text-[var(--text-secondary)]">({p.type})</span>
-            </li>
-          ))}
+        <ul className="space-y-2">
+          {data.passengers?.map((p, i) => {
+            const seat = getPassengerSeat(p)
+            const showSeat = Boolean(seat) || p.hasSeat === true
+
+            return (
+              <li
+                key={i}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-dark)]/30 px-3 py-2.5"
+              >
+                <div className="text-sm">
+                  <span className="font-medium text-[var(--text-primary)]">{p.name}</span>
+                  {p.type && (
+                    <span className="ml-1 text-[var(--text-secondary)]">({p.type})</span>
+                  )}
+                </div>
+                {showSeat && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--accent)]/30 bg-[var(--accent)]/10 px-2.5 py-1 text-xs font-medium text-[var(--accent)]">
+                    <Armchair className="h-3.5 w-3.5" />
+                    {seat ? `Seat ${seat}` : 'Seat assigned'}
+                  </span>
+                )}
+              </li>
+            )
+          })}
         </ul>
       </div>
 
@@ -112,13 +153,18 @@ export default function BookingItinerary({ data, handlers }) {
                 )}
               </div>
               <p className="text-sm">
-                {seg.from} ({seg.fromCity}) → {seg.to} ({seg.toCity})
+                {formatAirportLine(seg.from, seg.fromCity)} →{' '}
+                {formatAirportLine(seg.to, seg.toCity)}
               </p>
               <p className="text-xs text-[var(--text-secondary)]">
                 {formatDate(seg.departure)} · {formatTime(seg.departure)} –{' '}
                 {formatTime(seg.arrival)}
               </p>
-              <p className="text-[10px] text-[var(--text-secondary)]">{seg.cabinClass}</p>
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                {seg.cabinClass}
+                {seg.bookingClass ? ` · Class ${seg.bookingClass}` : ''}
+                {seg.depTerminal ? ` · Dep ${seg.depTerminal}` : ''}
+              </p>
             </div>
           </div>
         ))}
@@ -127,7 +173,7 @@ export default function BookingItinerary({ data, handlers }) {
       {data.pnr && (
         <ReservationQuickActions
           pnr={data.pnr}
-          flightNumber={data.segments?.[0]?.flightNumber}
+          flightNumber={primaryFlight}
           handlers={handlers}
           className="mt-4"
         />

@@ -70,3 +70,15 @@ body {
 .scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Hide scrollbar but keep swipe / scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

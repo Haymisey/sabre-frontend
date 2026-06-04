@@ -35,7 +35,12 @@ export function buildReservationSummary(data) {
     flightNumber,
     route,
     departure,
-    seat: data.seat || firstSeg?.seat || firstPassenger?.seat || null,
+    seat:
+      data.seat ||
+      firstSeg?.seat ||
+      firstPassenger?.seat ||
+      firstPassenger?.seatCode ||
+      null,
     bags: data.bags ?? data.baggage ?? data.bagCount ?? null,
     cabin: firstSeg?.cabinClass || data.cabinClass || data.cabin,
     isTicketed: data.isTicketed ?? data.ticketed,
@@ -69,7 +74,7 @@ export default function ReservationQuickActions({
 
   const onFlightStatus = () => {
     if (flightNumber) {
-      send(`Check flight status for ${flightNumber}`)
+      send(`What is the flight status of ${flightNumber}?`)
       return
     }
     send(

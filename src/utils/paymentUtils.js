@@ -378,11 +378,13 @@ export const buildPaymentPriceSummary = (data, promptMessage = '', context = {})
     data?.price?.base ??
     data?.pricing?.base
 
-  if (baseAmount == null && bookingPrice?.breakdown?.length) {
-    baseAmount = bookingPrice.breakdown.reduce(
-      (sum, row) => sum + (Number(row.baseFare) || 0),
-      0,
-    )
+  if (baseAmount == null && bookingPrice?.breakdown) {
+    const bd = bookingPrice.breakdown
+    if (Array.isArray(bd)) {
+      baseAmount = bd.reduce((sum, row) => sum + (Number(row.baseFare) || 0), 0)
+    } else if (bd.baseFare?.amount != null) {
+      baseAmount = bd.baseFare.amount
+    }
   }
 
   const base = toMoney(baseAmount, currency)
@@ -392,13 +394,31 @@ export const buildPaymentPriceSummary = (data, promptMessage = '', context = {})
 
   let taxLines = collectTaxLines(data, currency)
 
-  if (taxLines.length === 0 && bookingPrice?.breakdown?.length) {
-    const taxSum = bookingPrice.breakdown.reduce(
-      (sum, row) => sum + (Number(row.taxes) || 0),
-      0,
-    )
-    if (taxSum > 0) {
-      taxLines = [{ label: 'Taxes & fees', amount: taxSum, currency }]
+  if (taxLines.length === 0 && bookingPrice?.breakdown) {
+    const bd = bookingPrice.breakdown
+    if (Array.isArray(bd)) {
+      const taxSum = bd.reduce((sum, row) => sum + (Number(row.taxes) || 0), 0)
+      if (taxSum > 0) {
+        taxLines = [{ label: 'Taxes & fees', amount: taxSum, currency }]
+      }
+    } else {
+      if (Array.isArray(bd.taxDetails) && bd.taxDetails.length > 0) {
+        taxLines = bd.taxDetails.map((t) => ({
+          label: t.label || t.name || 'Tax',
+          amount: t.amount,
+          currency: t.currency || currency,
+        }))
+      } else if (bd.taxes?.amount != null) {
+        taxLines = [{ label: 'Taxes & fees', amount: bd.taxes.amount, currency: bd.taxes.currency }]
+      }
+      if (bd.surcharges?.amount > 0) {
+        rows.push({
+          key: 'surcharges',
+          label: 'Surcharges',
+          amount: bd.surcharges.amount,
+          currency: bd.surcharges.currency || currency,
+        })
+      }
     }
   }
 

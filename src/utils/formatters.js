@@ -28,6 +28,84 @@ export const formatPrice = (amount, currency = 'ETB') => {
 
 export const formatDuration = (duration) => duration || '—'
 
+/** Sabre-style MM/DD/YYYY HH:mm:ss (US) or ISO. */
+export const parseSabreDateTime = (value) => {
+  if (!value) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+
+  const str = String(value).trim()
+  const us = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/)
+  if (us) {
+    const [, month, day, year, h = '0', min = '0', sec = '0'] = us
+    const d = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(h),
+      Number(min),
+      Number(sec),
+    )
+    return Number.isNaN(d.getTime()) ? null : d
+  }
+
+  const iso = new Date(str)
+  return Number.isNaN(iso.getTime()) ? null : iso
+}
+
+export const formatSabreDateTime = (value) => {
+  const d = parseSabreDateTime(value)
+  if (!d) return value != null ? String(value) : '—'
+  return d.toLocaleString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+export const timeToTicketToMs = (tt) => {
+  if (!tt || typeof tt !== 'object') return null
+  const ms =
+    ((Number(tt.days) || 0) * 86400 +
+      (Number(tt.hours) || 0) * 3600 +
+      (Number(tt.minutes) || 0) * 60 +
+      (Number(tt.seconds) || 0)) *
+    1000
+  return ms > 0 ? ms : null
+}
+
+export const formatTimeToTicketRemaining = (ms) => {
+  if (ms == null || ms <= 0) return 'Expired'
+  const totalSec = Math.floor(ms / 1000)
+  const days = Math.floor(totalSec / 86400)
+  const hours = Math.floor((totalSec % 86400) / 3600)
+  const minutes = Math.floor((totalSec % 3600) / 60)
+  const seconds = totalSec % 60
+  const parts = []
+  if (days > 0) parts.push(`${days}d`)
+  if (hours > 0) parts.push(`${hours}h`)
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`)
+  if (days === 0 && hours === 0 && parts.length <= 1) parts.push(`${seconds}s`)
+  return parts.join(' ')
+}
+
+/** Miles earned on a fare (backend: awardedMiles). */
+export const getAwardedMiles = (fare) => {
+  const raw = fare?.awardedMiles ?? fare?.awardMiles ?? fare?.milesEarned ?? null
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+export const formatAwardedMiles = (fare, { short = false } = {}) => {
+  const miles = getAwardedMiles(fare)
+  if (miles == null) return null
+  const formatted = miles.toLocaleString('en-US')
+  return short ? `${formatted} mi` : `${formatted} miles`
+}
+
 export const getStatusColor = (status) => {
   const map = {
     ARRIVED: 'text-green-400',
