@@ -10,6 +10,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import { formatPrice } from '../../utils/formatters'
+import MarkdownContent from '../Chat/MarkdownContent'
 import {
   buildHoldPayload,
   buildPaymentPriceSummary,
@@ -202,9 +203,9 @@ export default function PaymentOptions({ data: rawData, handlers, promptMessage 
             className="p-5"
           >
             {promptMessage && (
-              <p className="mb-4 text-sm leading-relaxed text-[var(--text-primary)]">
-                {promptMessage}
-              </p>
+              <div className="mb-4 text-sm leading-relaxed text-[var(--text-primary)]">
+                <MarkdownContent>{promptMessage}</MarkdownContent>
+              </div>
             )}
 
             <PaymentPriceSummary summary={priceSummary.total ? priceSummary : { total }} />

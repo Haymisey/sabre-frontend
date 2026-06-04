@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { renderUIComponent } from '../../utils/componentRouter'
+import MarkdownContent from './MarkdownContent'
 
 export default function MessageBubble({ message, handlers }) {
   const isUser = message.role === 'user'
@@ -18,7 +19,7 @@ export default function MessageBubble({ message, handlers }) {
               : 'rounded-bl-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)]'
           }`}
         >
-          {message.content}
+          <MarkdownContent>{message.content}</MarkdownContent>
         </div>
       )}
 
