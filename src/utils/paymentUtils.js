@@ -1,3 +1,5 @@
+import { normalizeSabreCookie } from './sabreCookie'
+
 export const PAYMENT_CODE_LABELS = {
   VI: 'Visa',
   CA: 'Master Card',
@@ -14,6 +16,18 @@ export const PAYMENT_CODE_LABELS = {
   AFOP: 'Alternative payment',
   BNPL_6Hrs: 'Hold for 6 hours',
   BNPL_24Hrs: 'Hold for 24 hours',
+}
+
+/**
+ * Sabre gateway id for a method row — use fopSubCode (e.g. CBE = 13), not display `order` (e.g. 125).
+ * Card codes like "VI" stay as strings when non-numeric.
+ */
+export const resolvePaymentId = (row = {}) => {
+  const raw = row.paymentId ?? row.fopSubCode ?? row.fopSubQQCode ?? row.paymentCode
+  if (raw == null || String(raw).trim() === '') return null
+  const n = Number(raw)
+  if (Number.isFinite(n) && String(n) === String(raw).trim()) return n
+  return String(raw).trim()
 }
 
 export const normalizePaymentUiData = (raw) => {
@@ -124,6 +138,7 @@ export const flattenPaymentMethods = (options = []) => {
 
         methods.push({
           id: key,
+          paymentId: resolvePaymentId(afop),
           paymentName: afop.paymentName || PAYMENT_CODE_LABELS[afop.fopCode] || afop.fopCode,
           logoURI: afop.logoURI,
           paymentType: opt.paymentType,
@@ -159,6 +174,7 @@ export const flattenPaymentMethods = (options = []) => {
 
       methods.push({
         id: key,
+        paymentId: resolvePaymentId({ fopSubCode: opt.paymentCode, paymentCode: opt.paymentCode }),
         paymentName: label,
         logoURI: null,
         paymentType: opt.paymentType,
@@ -463,6 +479,40 @@ export const buildHoldPayload = (data) => {
   }
 }
 
+const paymentAmountNumber = (amount) => {
+  if (amount == null) return null
+  if (typeof amount === 'number' && Number.isFinite(amount)) return amount
+  if (typeof amount === 'object' && amount.amount != null) {
+    const n = Number(amount.amount)
+    return Number.isFinite(n) ? n : null
+  }
+  const n = Number(amount)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Gateway `ui_payload` for select_payment — not shown in the chat bubble. */
+export const buildSelectPaymentUiPayload = (method, data) => {
+  const cookie = normalizeSabreCookie(data?.cookie ?? null)
+  const amount = paymentAmountNumber(method?.amount)
+  const currency =
+    (typeof method?.amount === 'object' && method.amount?.currency) || 'ETB'
+
+  return {
+    paymentId: resolvePaymentId(method),
+    name: method?.paymentName ?? null,
+    amount,
+    currency,
+    paymentType: method?.paymentType ?? null,
+    paymentCode: method?.paymentCode ?? null,
+    fopCode: method?.fopCode ?? null,
+    fopSubCode: method?.fopSubCode ?? null,
+    fopSubQQCode: method?.fopSubQQCode ?? null,
+    afopQQCode: method?.afopQQCode ?? null,
+    ...(cookie ? { cookie } : {}),
+  }
+}
+
+/** Legacy selectedFlight shape (Sabre action fields). */
 export const buildPaymentSelectPayload = (method, data) => ({
   action: 'selectPayment',
   paymentType: method.paymentType,

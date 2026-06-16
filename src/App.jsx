@@ -24,9 +24,15 @@ export default function App() {
     onConfirmHoldBooking,
     handlePaymentHold,
     handlePaymentSelect,
+    handleExchangePaymentSuccess,
+    handleBookingPaymentSuccess,
+    handleRefundConfirmSuccess,
+    handleRefundCancel,
+    paymentSession,
     bookingContext,
     bookingFlowStep,
     blockFreeTextInput,
+    gatewayFlow,
     hasStarted,
   } = useChat(sessionId)
 
@@ -45,6 +51,11 @@ export default function App() {
       onConfirmHoldBooking,
       handlePaymentHold,
       handlePaymentSelect,
+      handleExchangePaymentSuccess,
+      handleBookingPaymentSuccess,
+      handleRefundConfirmSuccess,
+      handleRefundCancel,
+      paymentSession,
       bookingContext,
       bookingFlowStep,
       allMessages: messages,
@@ -62,6 +73,11 @@ export default function App() {
       onConfirmHoldBooking,
       handlePaymentHold,
       handlePaymentSelect,
+      handleExchangePaymentSuccess,
+      handleBookingPaymentSuccess,
+      handleRefundConfirmSuccess,
+      handleRefundCancel,
+      paymentSession,
       bookingContext,
       bookingFlowStep,
       messages,
@@ -115,6 +131,7 @@ export default function App() {
           disabled={isLoading || blockFreeTextInput}
           inputLockedByPayment={blockFreeTextInput}
           searchPassengerCounts={searchPassengerCounts}
+          gatewayFlow={gatewayFlow}
         />
       </main>
     </div>

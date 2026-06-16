@@ -1,13 +1,11 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import axios from 'axios'
 import { formatPrice } from '../utils/formatters'
 import {
   INITIAL_PASSENGER_COUNTS,
   normalizePassengerCounts,
-  validatePassengerCounts,
   formatPassengerCountsLabel,
   formatPassengersForSearch,
-  validatePassengersMatchSearch,
   buildPassengerSearchMessage,
   parsePassengerCountsFromText,
   parsePassengerCountsFromAssistant,
@@ -19,14 +17,26 @@ import {
   buildPassengerSubmissionMessage,
   sanitizeApiContact,
   sanitizeEmail,
-  validateAllBookingForms,
 } from '../utils/passengerForm'
-import { normalizeSabreCookie, isValidSabreCookie } from '../utils/sabreCookie'
+import { normalizeSabreCookie } from '../utils/sabreCookie'
 import {
   buildPaymentUiDataFallback,
+  buildSelectPaymentUiPayload,
   hasPaymentOptionsData,
   messageSuggestsPaymentChoice,
 } from '../utils/paymentUtils'
+import {
+  capturePaymentSessionFromResponse,
+  enrichCardHandoffUiData,
+  buildCardPaymentSuccessPayload,
+} from '../utils/paymentSession'
+import {
+  ACTIVE_FLOW,
+  INITIAL_GATEWAY_FLOW,
+  applyAssistantToGatewayFlow,
+  buildGatewayRequest,
+  clearGatewayFlow,
+} from '../utils/gatewayPayload'
 
 const messageAsksPassengerDetails = (text = '') => {
   const m = text.toLowerCase()
@@ -43,7 +53,7 @@ const WEBHOOK_URL =
   import.meta.env.VITE_WEBHOOK_URL ||
   'https://n8n-service-j7o2.onrender.com/webhook/4edc837e-bb47-40f3-a8c7-9889fe241956'
 
-const REQUEST_TIMEOUT = 30000
+const REQUEST_TIMEOUT = 1500000
 
 const createMessage = (role, content, extras = {}) => ({
   id: crypto.randomUUID(),
@@ -183,24 +193,24 @@ const buildSelectedFlightPayload = (selectedFlight) => {
 
   const passengers = Array.isArray(selectedFlight.passengers)
     ? selectedFlight.passengers.map((p) => ({
-        ...p,
-        passengerInfo: {
-          ...p.passengerInfo,
-          emails: (p.passengerInfo?.emails || []).map(sanitizeEmail).filter(Boolean),
-        },
-      }))
+      ...p,
+      passengerInfo: {
+        ...p.passengerInfo,
+        emails: (p.passengerInfo?.emails || []).map(sanitizeEmail).filter(Boolean),
+      },
+    }))
     : []
 
   const contact = sanitizeApiContact(
     selectedFlight.contact?.phones != null
       ? selectedFlight.contact
       : buildApiContact(
-          selectedFlight.contactForm || {
-            countryCode: '251',
-            number: '',
-            email: '',
-          },
-        ),
+        selectedFlight.contactForm || {
+          countryCode: '251',
+          number: '',
+          email: '',
+        },
+      ),
   )
 
   return {
@@ -229,14 +239,14 @@ const buildItineraryPartsFromLegs = (legs) =>
   (legs || []).flatMap((leg) =>
     leg.from && leg.to
       ? [
-          {
-            from: leg.from,
-            to: leg.to,
-            date:
-              leg.options?.[0]?.departure?.split?.('T')[0] ||
-              leg.options?.[0]?.segments?.[0]?.departure?.split?.('T')[0],
-          },
-        ]
+        {
+          from: leg.from,
+          to: leg.to,
+          date:
+            leg.options?.[0]?.departure?.split?.('T')[0] ||
+            leg.options?.[0]?.segments?.[0]?.departure?.split?.('T')[0],
+        },
+      ]
       : [],
   )
 
@@ -306,13 +316,36 @@ export const useChat = (sessionId) => {
   const [searchPassengerCounts, setSearchPassengerCounts] = useState(null)
   const [bookingFlowStep, setBookingFlowStep] = useState(BOOKING_FLOW_STEP.SEARCH)
   const [blockFreeTextInput, setBlockFreeTextInput] = useState(false)
+  const [gatewayFlow, setGatewayFlow] = useState(INITIAL_GATEWAY_FLOW)
   const bookingContextRef = useRef(null)
   const searchPassengerCountsRef = useRef(null)
   const lastPaymentUiDataRef = useRef(null)
+  const paymentSessionRef = useRef({})
+  const gatewayFlowRef = useRef(INITIAL_GATEWAY_FLOW)
   const abortRef = useRef(null)
 
   bookingContextRef.current = bookingContext
   searchPassengerCountsRef.current = searchPassengerCounts
+  gatewayFlowRef.current = gatewayFlow
+
+  const resetGatewayFlow = useCallback((activeFlow = null) => {
+    const cleared = { ...clearGatewayFlow(), activeFlow }
+    gatewayFlowRef.current = cleared
+    setGatewayFlow(cleared)
+  }, [])
+
+  const resolveGatewayActiveFlow = useCallback(() => {
+    const stored = gatewayFlowRef.current?.activeFlow
+    if (stored === ACTIVE_FLOW.MANAGE || stored === ACTIVE_FLOW.BOOKING) return stored
+    if (searchPassengerCountsRef.current || bookingContextRef.current?.outboundHashCode) {
+      return ACTIVE_FLOW.BOOKING
+    }
+    return stored || null
+  }, [])
+
+  useEffect(() => {
+    resetGatewayFlow()
+  }, [sessionId, resetGatewayFlow])
 
   const lockSearchPassengers = useCallback((counts) => {
     if (!counts) return null
@@ -329,6 +362,7 @@ export const useChat = (sessionId) => {
 
     const normalized = lockSearchPassengers(counts)
     setBookingContext(null)
+    resetGatewayFlow(ACTIVE_FLOW.BOOKING)
 
     const label = formatPassengerCountsLabel(normalized)
     setMessages([
@@ -339,13 +373,14 @@ export const useChat = (sessionId) => {
     ])
 
     return { ok: true }
-  }, [lockSearchPassengers])
+  }, [lockSearchPassengers, resetGatewayFlow])
 
   const resetBookingSearch = useCallback(() => {
     setSearchPassengerCounts(null)
     setBookingContext(null)
     setBookingFlowStep(BOOKING_FLOW_STEP.SEARCH)
-  }, [])
+    resetGatewayFlow()
+  }, [resetGatewayFlow])
 
   const appendPassengerDetailsPrompt = useCallback(() => {
     const counts =
@@ -371,7 +406,13 @@ export const useChat = (sessionId) => {
   }, [])
 
   const sendMessage = useCallback(
-    async (text, selectedFlight = null, passengers = null, cabinClass = null) => {
+    async (
+      text,
+      selectedFlight = null,
+      passengers = null,
+      cabinClass = null,
+      gatewayMeta = null,
+    ) => {
       if (!text?.trim() || !sessionId || isLoading) return
 
       const userMessage = createMessage('user', text.trim())
@@ -396,18 +437,28 @@ export const useChat = (sessionId) => {
           if (fromUserText) lockedPassengers = lockSearchPassengers(fromUserText)
         }
 
-        const payload = {
-          message: text.trim(),
+        const isNewBookingFlow = Boolean(
+          searchPassengerCountsRef.current || bookingContextRef.current?.outboundHashCode,
+        )
+
+        const { payload, nextState: flowAfterSend } = buildGatewayRequest({
+          chatInput: text.trim(),
           sessionId,
+          flowState: gatewayFlowRef.current,
           history: historyForApi,
-          selectedFlight: buildSelectedFlightPayload(selectedFlight),
-        }
-        if (lockedPassengers) {
-          payload.passengers = formatPassengersForSearch(lockedPassengers)
-        }
-        if (cabinClass != null && cabinClass !== '') {
-          payload.cabinClass = cabinClass
-        }
+          selectedFlight: gatewayMeta?.ui_action
+            ? null
+            : buildSelectedFlightPayload(selectedFlight),
+          passengers: lockedPassengers ? formatPassengersForSearch(lockedPassengers) : null,
+          cabinClass,
+          activeFlow: gatewayMeta?.activeFlow ?? null,
+          ui_action: gatewayMeta?.ui_action ?? null,
+          ui_payload: gatewayMeta?.ui_payload ?? null,
+          isNewBookingFlow,
+        })
+
+        gatewayFlowRef.current = flowAfterSend
+        setGatewayFlow(flowAfterSend)
 
         const { data: rawData } = await axios.post(WEBHOOK_URL, payload, {
           signal: controller.signal,
@@ -481,10 +532,17 @@ export const useChat = (sessionId) => {
         if (ui_component === 'passenger_details') {
           setBookingFlowStep(BOOKING_FLOW_STEP.DETAILS)
         }
-        if (ui_component === 'booking_price') {
+        if (ui_component === 'booking_price' || ui_component === 'exchange_fare_difference') {
           setBookingFlowStep(BOOKING_FLOW_STEP.PRICE)
         }
-        if (ui_component === 'booking_confirmed') {
+        const isCardHandoff =
+          ui_component === 'exchange_card_handoff' || ui_component === 'booking_card_handoff'
+        const isRefundOtpHandoff = ui_component === 'refund_otp_handoff'
+
+        if (isCardHandoff || isRefundOtpHandoff) {
+          setBlockFreeTextInput(true)
+        }
+        if (ui_component === 'booking_confirmed' || ui_component === 'exchange_confirmed') {
           setBookingFlowStep(BOOKING_FLOW_STEP.HOLD)
         }
         let resolvedUiComponent = ui_component
@@ -510,6 +568,37 @@ export const useChat = (sessionId) => {
           }
           setBlockFreeTextInput(true)
           setBookingFlowStep(BOOKING_FLOW_STEP.HOLD)
+        }
+
+        paymentSessionRef.current = capturePaymentSessionFromResponse(
+          paymentSessionRef.current,
+          {
+            data,
+            uiData: enrichedUiData ?? ui_data,
+            cookie: paymentCookie,
+            activeFlow: gatewayFlowRef.current?.activeFlow,
+            hasBookingContext: Boolean(bookingContextRef.current?.outboundHashCode),
+          },
+        )
+
+        if (
+          isCardHandoff &&
+          enrichedUiData &&
+          typeof enrichedUiData === 'object' &&
+          !Array.isArray(enrichedUiData)
+        ) {
+          enrichedUiData = enrichCardHandoffUiData(
+            {
+              ...enrichedUiData,
+              paymentMode:
+                ui_component === 'booking_card_handoff' ? 'booking' : 'exchange',
+            },
+            {
+              paymentSession: paymentSessionRef.current,
+              bookingContext: bookingContextRef.current,
+              rootData: data,
+            },
+          )
         }
 
         // Many backend responses include additional metadata in `ai_summary`
@@ -538,10 +627,19 @@ export const useChat = (sessionId) => {
 
         setMessages((prev) => [...prev, assistantMessage])
 
+        const flowAfterAssistant = applyAssistantToGatewayFlow(flowAfterSend, {
+          message: data.message || '',
+          uiData: enrichedUiData,
+          userText: text.trim(),
+        })
+        gatewayFlowRef.current = flowAfterAssistant
+        setGatewayFlow(flowAfterAssistant)
+
         if (ui_component === 'booking_confirmed' && data.ui_data?.success) {
           setBookingContext(null)
           setSearchPassengerCounts(null)
           setBookingFlowStep(BOOKING_FLOW_STEP.SEARCH)
+          resetGatewayFlow()
         }
       } catch (err) {
         clearTimeout(timeoutId)
@@ -570,14 +668,11 @@ export const useChat = (sessionId) => {
         abortRef.current = null
       }
     },
-    [sessionId, messages, isLoading, appendPassengerDetailsPrompt, lockSearchPassengers],
+    [sessionId, messages, isLoading, appendPassengerDetailsPrompt, lockSearchPassengers, resetGatewayFlow],
   )
 
   const handlePassengerConfirm = useCallback(
     (passengers, cabinClass, flightDetails) => {
-      const err = validatePassengerCounts(passengers)
-      if (err) return { error: err }
-
       const message = buildPassengerSearchMessage(passengers, cabinClass, flightDetails)
       sendMessage(message, null, passengers, cabinClass)
       return { ok: true }
@@ -590,12 +685,6 @@ export const useChat = (sessionId) => {
       const counts = normalizePassengerCounts(
         searchPassengerCountsRef.current || INITIAL_PASSENGER_COUNTS,
       )
-      if (!searchPassengerCountsRef.current) {
-        return {
-          error:
-            'Traveler count is not locked for this search. Mention passengers in your search (e.g. "2 adults") or use the traveler picker when it appears.',
-        }
-      }
 
       const sabreCookie = normalizeSabreCookie(cookie)
       if (!sabreCookie) {
@@ -656,22 +745,10 @@ export const useChat = (sessionId) => {
   const handleSubmitPassengerDetails = useCallback(
     (bookingForms) => {
       const ctx = bookingContextRef.current
-      if (!ctx) return { error: 'No flight selected. Please choose a flight first.' }
-
-      const formValidation = validateAllBookingForms(
-        bookingForms.passengerForms,
-        bookingForms.contactForm,
-      )
-      if (!formValidation.valid) {
-        return { error: 'Please fix the highlighted passenger or contact fields.' }
-      }
 
       const apiPassengers = buildApiPassengers(bookingForms.passengerForms)
-      const searchCounts = searchPassengerCountsRef.current || ctx.passengerCounts
-      const matchError = validatePassengersMatchSearch(apiPassengers, searchCounts)
-      if (matchError) return { error: matchError }
       const apiContact = buildApiContact(bookingForms.contactForm)
-      const travelerLabel = formatPassengerCountsLabel(ctx.passengerCounts)
+      const travelerLabel = formatPassengerCountsLabel(ctx?.passengerCounts)
 
       const payload = buildSelectedFlightPayload({
         action: 'submitPassengers',
@@ -687,11 +764,11 @@ export const useChat = (sessionId) => {
       setBookingContext((c) =>
         c
           ? {
-              ...c,
-              step: 'passengers_sent',
-              passengers: apiPassengers,
-              contact: apiContact,
-            }
+            ...c,
+            step: 'passengers_sent',
+            passengers: apiPassengers,
+            contact: apiContact,
+          }
           : c,
       )
       setBookingFlowStep(BOOKING_FLOW_STEP.PRICE)
@@ -747,28 +824,169 @@ export const useChat = (sessionId) => {
   )
 
   const handlePaymentSelect = useCallback(
-    (payload, method) => {
+    (_payload, method, paymentData) => {
       setBlockFreeTextInput(false)
-      const label = method?.paymentName || payload?.paymentName || 'selected method'
-      sendMessage(`Pay with ${label}`, payload)
+      const label = method?.paymentName || 'selected method'
+      const ui_payload = buildSelectPaymentUiPayload(method, paymentData)
+      const paymentFlow = resolveGatewayActiveFlow()
+      sendMessage(`Pay with ${label}`, null, null, null, {
+        ...(paymentFlow ? { activeFlow: paymentFlow } : {}),
+        ui_action: 'select_payment',
+        ui_payload,
+      })
       return { ok: true }
     },
-    [sendMessage],
+    [sendMessage, resolveGatewayActiveFlow],
   )
+
+  const handleExchangePaymentSuccess = useCallback(
+    (result = {}) => {
+      setBlockFreeTextInput(false)
+      const paidPnr = result.pnr || 'unknown'
+      const paymentFlow = resolveGatewayActiveFlow()
+      const ui_payload = buildCardPaymentSuccessPayload(result, {
+        pnr: paidPnr,
+        fareDifference: result.fareDifference,
+        currency: result.currency,
+        cookie: result.cookie,
+      })
+      sendMessage(`Payment successful for PNR ${paidPnr}`, null, null, null, {
+        ...(paymentFlow ? { activeFlow: paymentFlow } : {}),
+        ui_action: 'exchange_payment_complete',
+        ui_payload,
+      })
+      return { ok: true }
+    },
+    [sendMessage, resolveGatewayActiveFlow],
+  )
+
+  const handleBookingPaymentSuccess = useCallback(
+    (result = {}) => {
+      setBlockFreeTextInput(false)
+
+      // Extract PNR reloc from the full Sabre response object
+      const pnrObj = result.response?.pnr ?? result.pnr ?? null
+      const reloc =
+        (typeof pnrObj === 'object' ? pnrObj?.reloc : pnrObj) ||
+        result.pnr ||
+        'unknown'
+
+      // Extract e-ticket number(s) from travelPartsAdditionalDetails
+      const travelParts =
+        result.response?.pnr?.travelPartsAdditionalDetails ??
+        pnrObj?.travelPartsAdditionalDetails ??
+        []
+      const eticket =
+        travelParts?.[0]?.passengers?.[0]?.eticketNumber ?? null
+
+      // Extract passenger name
+      const firstPax = result.response?.pnr?.passengers?.[0] ?? pnrObj?.passengers?.[0] ?? null
+      const passengerName = firstPax
+        ? [
+            firstPax.passengerDetails?.prefix,
+            firstPax.passengerDetails?.firstName,
+            firstPax.passengerDetails?.lastName,
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : null
+
+      // Extract itinerary segments for the summary card
+      const itineraryParts =
+        result.response?.pnr?.itinerary?.itineraryParts ??
+        pnrObj?.itinerary?.itineraryParts ??
+        []
+      const firstSeg = itineraryParts?.[0]?.segments?.[0] ?? null
+      const segments = firstSeg
+        ? [
+            {
+              from: firstSeg.origin,
+              to: firstSeg.destination,
+              flightNumber: firstSeg.flight
+                ? `${firstSeg.flight.airlineCode}${firstSeg.flight.flightNumber}`
+                : null,
+              departure: firstSeg.departure,
+              arrival: firstSeg.arrival,
+              cabinClass: firstSeg.cabinClass,
+            },
+          ]
+        : []
+
+      // Build payment info
+      const payments = result.response?.pnr?.payments ?? pnrObj?.payments ?? []
+      const firstPayment = payments?.[0]
+      const totalAmount =
+        firstPayment?.price?.alternatives?.[0]?.[0]?.amount ??
+        result.totalAmount ??
+        null
+      const currency =
+        firstPayment?.price?.alternatives?.[0]?.[0]?.currency ??
+        result.currency ??
+        'ETB'
+
+      // Inject confirmation card directly into chat — no sendMessage to the bot
+      const confirmationMsg = createMessage('assistant', '', {
+        ui_component: 'booking_confirmed',
+        ui_data: {
+          success: true,
+          pnr: reloc,
+          eticket,
+          passengerName,
+          isTicketed: result.response?.pnr?.isTicketed ?? pnrObj?.isTicketed ?? true,
+          segments,
+          passengers: firstPax ? [firstPax] : [],
+          total_price: totalAmount,
+          currency,
+          message: eticket
+            ? `E-Ticket: ${eticket}`
+            : 'Your booking has been confirmed.',
+        },
+      })
+      setMessages((prev) => [...prev, confirmationMsg])
+
+      // Reset booking state
+      setBookingContext(null)
+      setSearchPassengerCounts(null)
+      setBookingFlowStep(BOOKING_FLOW_STEP.SEARCH)
+      resetGatewayFlow()
+
+      return { ok: true }
+    },
+    [resetGatewayFlow],
+  )
+
+  const handleRefundConfirmSuccess = useCallback(
+    (result = {}) => {
+      setBlockFreeTextInput(false)
+      const paymentFlow = resolveGatewayActiveFlow()
+      sendMessage(`Refund OTP confirmed successfully`, null, null, null, {
+        ...(paymentFlow ? { activeFlow: paymentFlow } : {}),
+        ui_action: 'refund_payment_complete',
+        ui_payload: result,
+      })
+      return { ok: true }
+    },
+    [sendMessage, resolveGatewayActiveFlow],
+  )
+
+  const handleRefundCancel = useCallback(() => {
+    setBlockFreeTextInput(false)
+    return { ok: true }
+  }, [])
 
   const onConfirmHoldBooking = useCallback(() => {
     const ctx = bookingContextRef.current
     const payload = ctx
       ? buildSelectedFlightPayload({
-          action: 'holdBooking',
-          outboundHashCode: ctx.outboundHashCode,
-          returnHashCode: 0,
-          itineraryParts: ctx.itineraryParts,
-          cookie: ctx.cookie,
-          passengerCounts: ctx.passengerCounts,
-          passengers: ctx.passengers || [],
-          contact: ctx.contact || { emails: [], phones: [] },
-        })
+        action: 'holdBooking',
+        outboundHashCode: ctx.outboundHashCode,
+        returnHashCode: 0,
+        itineraryParts: ctx.itineraryParts,
+        cookie: ctx.cookie,
+        passengerCounts: ctx.passengerCounts,
+        passengers: ctx.passengers || [],
+        contact: ctx.contact || { emails: [], phones: [] },
+      })
       : null
 
     sendMessage('Yes, confirm and hold the booking', payload)
@@ -782,7 +1000,9 @@ export const useChat = (sessionId) => {
     setBookingFlowStep(BOOKING_FLOW_STEP.SEARCH)
     setBlockFreeTextInput(false)
     lastPaymentUiDataRef.current = null
-  }, [])
+    paymentSessionRef.current = {}
+    resetGatewayFlow()
+  }, [resetGatewayFlow])
 
   return {
     messages,
@@ -800,10 +1020,16 @@ export const useChat = (sessionId) => {
     onConfirmHoldBooking,
     handlePaymentHold,
     handlePaymentSelect,
+    handleExchangePaymentSuccess,
+    handleBookingPaymentSuccess,
+    handleRefundConfirmSuccess,
+    handleRefundCancel,
+    paymentSession: paymentSessionRef.current,
     bookingContext,
     bookingFlowStep,
     blockFreeTextInput,
     clearMessages,
+    gatewayFlow,
     hasStarted: messages.length > 0,
   }
 }

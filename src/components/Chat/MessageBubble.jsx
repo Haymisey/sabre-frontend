@@ -11,7 +11,10 @@ export default function MessageBubble({ message, handlers }) {
       animate={{ opacity: 1, y: 0 }}
       className={`flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}
     >
-      {message.content && message.ui_component !== 'payment_options' && (
+      {message.content &&
+        !['payment_options', 'exchange_card_handoff', 'booking_card_handoff'].includes(
+          message.ui_component,
+        ) && (
         <div
           className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-relaxed md:max-w-[85%] ${
             isUser

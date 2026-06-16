@@ -14,6 +14,8 @@ import PassengerDetailsPanel from '../components/UIComponents/PassengerDetailsPa
 import PassengerPicker from '../components/UIComponents/PassengerPicker'
 import AncillaryPicker from '../components/UIComponents/AncillaryPicker'
 import PaymentOptions from '../components/UIComponents/PaymentOptions'
+import SecureCardPayment from '../components/UIComponents/SecureCardPayment'
+import RefundOtpHandoff from '../components/UIComponents/RefundOtpHandoff'
 
 export const componentRouter = {
   flight_list: FlightList,
@@ -31,6 +33,9 @@ export const componentRouter = {
   seat_map: SeatMap,
   seat_selected: SeatSelected,
   payment_options: PaymentOptions,
+  exchange_card_handoff: SecureCardPayment,
+  booking_card_handoff: SecureCardPayment,
+  refund_otp_handoff: RefundOtpHandoff,
   error: ErrorCard,
 }
 
@@ -41,6 +46,7 @@ export const renderUIComponent = (ui_component, ui_data, handlers, messageProps 
     <Component
       data={ui_data}
       handlers={handlers}
+      ui_component={ui_component}
       cookie={messageProps.cookie}
       itineraryParts={messageProps.itineraryParts}
       passengerCounts={messageProps.passengerCounts}
