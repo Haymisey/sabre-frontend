@@ -842,22 +842,27 @@ export const useChat = (sessionId) => {
   const handleExchangePaymentSuccess = useCallback(
     (result = {}) => {
       setBlockFreeTextInput(false)
-      const paidPnr = result.pnr || 'unknown'
-      const paymentFlow = resolveGatewayActiveFlow()
-      const ui_payload = buildCardPaymentSuccessPayload(result, {
-        pnr: paidPnr,
-        fareDifference: result.fareDifference,
-        currency: result.currency,
-        cookie: result.cookie,
+
+      // Build UI data for exchange confirmation
+      const pnr = result.pnr || result.response?.pnr?.reloc || 'unknown'
+      const eticket = result.response?.pnr?.travelPartsAdditionalDetails?.[0]?.passengers?.[0]?.eticketNumber || null
+
+      const confirmationMsg = createMessage('assistant', '', {
+        ui_component: 'exchange_confirmed',
+        ui_data: {
+          success: true,
+          pnr,
+          eticket,
+          message: eticket ? `E-Ticket: ${eticket}` : 'Your exchange has been confirmed.',
+        },
       })
-      sendMessage(`Payment successful for PNR ${paidPnr}`, null, null, null, {
-        ...(paymentFlow ? { activeFlow: paymentFlow } : {}),
-        ui_action: 'exchange_payment_complete',
-        ui_payload,
-      })
+      setMessages((prev) => [...prev, confirmationMsg])
+
+      // Reset state similar to booking flow
+      resetGatewayFlow()
       return { ok: true }
     },
-    [sendMessage, resolveGatewayActiveFlow],
+    [resetGatewayFlow],
   )
 
   const handleBookingPaymentSuccess = useCallback(
@@ -924,7 +929,7 @@ export const useChat = (sessionId) => {
         result.currency ??
         'ETB'
 
-      // Inject confirmation card directly into chat — no sendMessage to the bot
+      // Inject confirmation card directly into chat — no send
       const confirmationMsg = createMessage('assistant', '', {
         ui_component: 'booking_confirmed',
         ui_data: {

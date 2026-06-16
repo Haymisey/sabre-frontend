@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Mic } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { Send, Mic, Paperclip, X, Loader2 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { formatPassengerCountsLabel } from '../../utils/passengers'
 
 const MAX_ROWS = 5
@@ -12,9 +12,17 @@ export default function InputBar({
   inputLockedByPayment = false,
   searchPassengerCounts,
   gatewayFlow,
+  // OCR image props
+  images = [],
+  onAddImages,
+  onRemoveImage,
 }) {
   const [text, setText] = useState('')
   const textareaRef = useRef(null)
+  const fileInputRef = useRef(null)
+
+  // True while at least one image is still being OCR-processed
+  const isOcrPending = images.some((img) => img.status === 'pending')
 
   /** Auto-resize: grow up to MAX_ROWS lines, then scroll */
   const resize = useCallback(() => {
@@ -33,21 +41,47 @@ export default function InputBar({
     setText(e.target.value)
   }
 
+  const handleSend = () => {
+    const hasText = text.trim()
+    const hasImages = images.length > 0
+    if ((!hasText && !hasImages) || disabled || isOcrPending) return
+
+    // Build combined message: user text + all extracted OCR texts
+    const ocrTexts = images
+      .filter((img) => img.text)
+      .map((img) => `[Image text: ${img.text}]`)
+      .join('\n')
+
+    const combined = [hasText ? text.trim() : null, ocrTexts || null]
+      .filter(Boolean)
+      .join('\n')
+
+    onSend(combined)
+    setText('')
+  }
+
   const handleKeyDown = (e) => {
-    // Send on Enter (without Shift); Shift+Enter inserts a newline
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (!text.trim() || disabled) return
-      onSend(text.trim())
-      setText('')
+      handleSend()
     }
   }
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!text.trim() || disabled) return
-    onSend(text.trim())
-    setText('')
+    handleSend()
+  }
+
+  const handleFileChange = (e) => {
+    if (e.target.files?.length && onAddImages) {
+      onAddImages(e.target.files)
+    }
+    // Reset so the same file can be re-selected
+    e.target.value = ''
+  }
+
+  const openFilePicker = () => {
+    fileInputRef.current?.click()
   }
 
   const placeholder = inputLockedByPayment
@@ -56,17 +90,105 @@ export default function InputBar({
       ? `Where to fly? (${formatPassengerCountsLabel(searchPassengerCounts)} locked) e.g. ADD to DXB on 30 Sep 2026`
       : 'Ask about flights, bookings, status...'
 
+  // Whether the send button should be active
+  const canSend =
+    !disabled &&
+    !inputLockedByPayment &&
+    !isOcrPending &&
+    (text.trim().length > 0 || images.length > 0)
+
   return (
     <div className="border-t border-[var(--border)] bg-[var(--bg-card)]/90 backdrop-blur-md">
+      {/* Hidden file input — images only */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
+      {/* Image thumbnail strip — only shown when images are attached */}
+      <AnimatePresence>
+        {images.length > 0 && (
+          <motion.div
+            key="strip"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mx-auto max-w-3xl px-3 pt-3 md:px-4"
+          >
+            <div className="flex flex-wrap gap-2">
+              {images.map((img, idx) => (
+                <motion.div
+                  key={idx}
+                  initial={{ opacity: 0, scale: 0.85 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.85 }}
+                  className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-[var(--border)]"
+                >
+                  <img
+                    src={img.preview}
+                    alt="attachment"
+                    className="h-full w-full object-cover"
+                  />
+
+                  {/* OCR pending spinner overlay */}
+                  {img.status === 'pending' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                      <Loader2 className="h-5 w-5 animate-spin text-white" />
+                    </div>
+                  )}
+
+                  {/* No readable text warning */}
+                  {img.status === 'no_text' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-red-900/70">
+                      <span className="text-center text-[9px] font-medium leading-tight text-red-200">
+                        No text
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Remove button */}
+                  <button
+                    type="button"
+                    onClick={() => onRemoveImage?.(idx)}
+                    className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white shadow"
+                    aria-label="Remove image"
+                  >
+                    <X size={10} />
+                  </button>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <form onSubmit={handleSubmit} className="p-3 md:p-4">
         <div className="mx-auto flex max-w-3xl items-end gap-2">
+          {/* Paperclip / attach button */}
+          {onAddImages && (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.95 }}
+              disabled={disabled || inputLockedByPayment}
+              onClick={openFilePicker}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
+              aria-label="Attach image"
+            >
+              <Paperclip className="h-5 w-5" />
+            </motion.button>
+          )}
+
           <textarea
             ref={textareaRef}
             rows={1}
             value={text}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            disabled={disabled}
+            disabled={disabled || inputLockedByPayment}
             placeholder={placeholder}
             autoComplete="off"
             style={{ scrollbarWidth: 'none' }} /* Firefox invisible scrollbar */
@@ -83,7 +205,7 @@ export default function InputBar({
           <motion.button
             type="button"
             whileTap={{ scale: 0.95 }}
-            disabled={disabled}
+            disabled={disabled || inputLockedByPayment}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
             aria-label="Voice input"
           >
@@ -92,11 +214,15 @@ export default function InputBar({
           <motion.button
             type="submit"
             whileTap={{ scale: 0.95 }}
-            disabled={disabled || !text.trim()}
+            disabled={!canSend}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--bg-dark)] transition hover:bg-[var(--accent-light)] disabled:opacity-40"
             aria-label="Send message"
           >
-            <Send className="h-5 w-5" />
+            {isOcrPending ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Send className="h-5 w-5" />
+            )}
           </motion.button>
         </div>
       </form>

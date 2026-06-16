@@ -5,6 +5,7 @@ import ChatWindow from './components/Chat/ChatWindow'
 import InputBar from './components/Chat/InputBar'
 import { useSession } from './hooks/useSession'
 import { useChat } from './hooks/useChat'
+import { useImageOcr } from './hooks/useImageOcr'
 
 export default function App() {
   const { sessionId } = useSession()
@@ -35,6 +36,8 @@ export default function App() {
     gatewayFlow,
     hasStarted,
   } = useChat(sessionId)
+
+  const { images, addFiles, removeImage, clearImages } = useImageOcr()
 
   const handlers = useMemo(
     () => ({
@@ -102,6 +105,12 @@ export default function App() {
     }
   }
 
+  // Send message + clear attached images together
+  const handleSend = (text) => {
+    sendMessage(text)
+    clearImages()
+  }
+
   if (!sessionId) {
     return (
       <div className="flex h-full items-center justify-center bg-[var(--bg-dark)]">
@@ -127,11 +136,14 @@ export default function App() {
           />
         </AnimatePresence>
         <InputBar
-          onSend={sendMessage}
+          onSend={handleSend}
           disabled={isLoading || blockFreeTextInput}
           inputLockedByPayment={blockFreeTextInput}
           searchPassengerCounts={searchPassengerCounts}
           gatewayFlow={gatewayFlow}
+          images={images}
+          onAddImages={addFiles}
+          onRemoveImage={removeImage}
         />
       </main>
     </div>
