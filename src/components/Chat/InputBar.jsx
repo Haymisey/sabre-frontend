@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Send, Mic, Paperclip, X, Loader2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { formatPassengerCountsLabel } from '../../utils/passengers'
+import { useVoiceRecorder } from '../../hooks/useVoiceRecorder'
+import WaveformBars from './WaveformBars'
 
 const MAX_ROWS = 5
 const LINE_HEIGHT = 22 // px — matches text-sm (~14px) with comfortable leading
@@ -20,9 +22,32 @@ export default function InputBar({
   const [text, setText] = useState('')
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+  const [voiceError, setVoiceError] = useState('')
 
   // True while at least one image is still being OCR-processed
   const isOcrPending = images.some((img) => img.status === 'pending')
+
+  // Voice recorder hook
+  const { status, analyserRef, toggle: toggleRecording, cancel: cancelRecording } = useVoiceRecorder({
+    onTranscript: (txt) => {
+      // Append transcribed text to existing textarea content
+      setText((prev) => (prev ? prev + ' ' : '') + txt)
+    },
+    onError: (msg) => {
+      setVoiceError(msg)
+    },
+  })
+
+  const isRecording = status === 'recording'
+  const isTranscribing = status === 'transcribing'
+
+  // Auto‑clear toast after 3s
+  useEffect(() => {
+    if (voiceError) {
+      const timer = setTimeout(() => setVoiceError(''), 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [voiceError])
 
   /** Auto-resize: grow up to MAX_ROWS lines, then scroll */
   const resize = useCallback(() => {
@@ -95,10 +120,33 @@ export default function InputBar({
     !disabled &&
     !inputLockedByPayment &&
     !isOcrPending &&
+    !isRecording &&
+    !isTranscribing &&
     (text.trim().length > 0 || images.length > 0)
 
   return (
-    <div className="border-t border-[var(--border)] bg-[var(--bg-card)]/90 backdrop-blur-md">
+    <div className="relative border-t border-[var(--border)] bg-[var(--bg-card)]/90 backdrop-blur-md">
+      {/* Voice Error Toast */}
+      <AnimatePresence>
+        {voiceError && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="absolute bottom-full mb-2 left-4 right-4 z-50 rounded-xl bg-red-500/90 text-white px-4 py-3 text-xs font-medium shadow-lg backdrop-blur-sm flex items-center justify-between gap-2 border border-red-400/20"
+          >
+            <span>{voiceError}</span>
+            <button
+              type="button"
+              onClick={() => setVoiceError('')}
+              className="text-white/80 hover:text-white transition-colors"
+            >
+              <X size={14} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Hidden file input — images only */}
       <input
         ref={fileInputRef}
@@ -173,7 +221,7 @@ export default function InputBar({
             <motion.button
               type="button"
               whileTap={{ scale: 0.95 }}
-              disabled={disabled || inputLockedByPayment}
+              disabled={disabled || inputLockedByPayment || isRecording || isTranscribing}
               onClick={openFilePicker}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
               aria-label="Attach image"
@@ -182,34 +230,68 @@ export default function InputBar({
             </motion.button>
           )}
 
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={text}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            disabled={disabled || inputLockedByPayment}
-            placeholder={placeholder}
-            autoComplete="off"
-            style={{ scrollbarWidth: 'none' }} /* Firefox invisible scrollbar */
-            className="
-              flex-1 resize-none rounded-xl border border-[var(--border)]
-              bg-[var(--bg-dark)] px-4 py-3 text-sm leading-[22px]
-              text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]
-              outline-none transition overflow-y-auto
-              focus:border-[var(--accent)]/50 focus:ring-1 focus:ring-[var(--accent)]/30
-              disabled:opacity-50
-              [&::-webkit-scrollbar]:hidden
-            "
-          />
+          {isRecording ? (
+            <div className="relative flex-1 min-h-[44px] flex items-center justify-between rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-2">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
+                <span className="text-xs font-medium text-red-400">Recording...</span>
+              </div>
+              <div className="flex-1 flex justify-center">
+                <WaveformBars analyserRef={analyserRef} active={isRecording} />
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  className="text-xs font-medium text-[var(--text-secondary)] hover:text-red-400 transition-colors px-2 py-1 rounded-md hover:bg-white/5"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={text}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              disabled={disabled || inputLockedByPayment || isTranscribing}
+              placeholder={placeholder}
+              autoComplete="off"
+              style={{ scrollbarWidth: 'none' }} /* Firefox invisible scrollbar */
+              className="
+                flex-1 resize-none rounded-xl border border-[var(--border)]
+                bg-[var(--bg-dark)] px-4 py-3 text-sm leading-[22px]
+                text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]
+                outline-none transition overflow-y-auto
+                focus:border-[var(--accent)]/50 focus:ring-1 focus:ring-[var(--accent)]/30
+                disabled:opacity-50
+                [&::-webkit-scrollbar]:hidden
+              "
+            />
+          )}
+
           <motion.button
             type="button"
             whileTap={{ scale: 0.95 }}
-            disabled={disabled || inputLockedByPayment}
+            disabled={disabled || inputLockedByPayment || isTranscribing}
+            onClick={() => !disabled && !inputLockedByPayment && !isTranscribing && toggleRecording()}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
-            aria-label="Voice input"
+            aria-label={isRecording ? 'Stop recording' : isTranscribing ? 'Transcribing...' : 'Start voice input'}
           >
-            <Mic className="h-5 w-5" />
+            {isRecording ? (
+              <span className="relative flex h-5 w-5 items-center justify-center">
+                <span className="absolute h-3 w-3 rounded-sm bg-red-500 animate-pulse" />
+              </span>
+            ) : isTranscribing ? (
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" />
+            ) : (
+              <Mic className="h-5 w-5" />
+            )}
           </motion.button>
           <motion.button
             type="submit"
