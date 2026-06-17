@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Mic, Paperclip, X, Loader2 } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Send, Mic, Paperclip, X, Loader2, FileText, Eye } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { formatPassengerCountsLabel } from '../../utils/passengers'
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder'
@@ -23,6 +24,7 @@ export default function InputBar({
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
   const [voiceError, setVoiceError] = useState('')
+  const [previewedFileIndex, setPreviewedFileIndex] = useState(null)
 
   // True while at least one image is still being OCR-processed
   const isOcrPending = images.some((img) => img.status === 'pending')
@@ -66,15 +68,24 @@ export default function InputBar({
     setText(e.target.value)
   }
 
+  const handleRemoveImage = (idx) => {
+    onRemoveImage?.(idx)
+    setPreviewedFileIndex(null)
+  }
+
   const handleSend = () => {
     const hasText = text.trim()
     const hasImages = images.length > 0
     if ((!hasText && !hasImages) || disabled || isOcrPending) return
 
-    // Build combined message: user text + all extracted OCR texts
+    // Build combined message: user text + all extracted OCR/PDF texts
     const ocrTexts = images
       .filter((img) => img.text)
-      .map((img) => `[Image text: ${img.text}]`)
+      .map((img) => {
+        const isPdf = img.file.type === 'application/pdf';
+        const label = isPdf ? 'PDF text' : 'Image text';
+        return `[${label}: ${img.text}]`;
+      })
       .join('\n')
 
     const combined = [hasText ? text.trim() : null, ocrTexts || null]
@@ -147,17 +158,128 @@ export default function InputBar({
         )}
       </AnimatePresence>
 
-      {/* Hidden file input — images only */}
+      {/* File Preview Modal */}
+      {createPortal(
+        <AnimatePresence>
+          {previewedFileIndex !== null && images[previewedFileIndex] && (() => {
+            const fileObj = images[previewedFileIndex];
+            const isPdf = fileObj.file.type === 'application/pdf';
+            return (
+              <motion.div
+                key="modal-overlay"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+                onClick={() => setPreviewedFileIndex(null)}
+              >
+                <motion.div
+                  initial={{ scale: 0.95, y: 20 }}
+                  animate={{ scale: 1, y: 0 }}
+                  exit={{ scale: 0.95, y: 20 }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+                  className="relative flex flex-col md:flex-row w-full max-w-4xl h-[80vh] md:h-[65vh] bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Header close button */}
+                  <button
+                    type="button"
+                    onClick={() => setPreviewedFileIndex(null)}
+                    className="absolute right-4 top-4 z-50 p-2 rounded-full bg-[var(--bg-dark)]/85 text-[var(--text-secondary)] hover:text-white transition-colors border border-[var(--border)]"
+                    aria-label="Close preview"
+                  >
+                    <X size={18} />
+                  </button>
+
+                  {/* Left Side: Visual Preview */}
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 bg-[var(--bg-dark)] border-b md:border-b-0 md:border-r border-[var(--border)] min-h-[250px] md:min-h-0">
+                    {isPdf ? (
+                      <div className="flex flex-col items-center justify-center text-center max-w-xs">
+                        <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-2xl mb-4">
+                          <FileText className="h-16 w-16 text-red-500" />
+                        </div>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)] truncate w-full px-4">
+                          {fileObj.file.name}
+                        </h3>
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">
+                          PDF Document • {(fileObj.file.size / 1024).toFixed(1)} KB
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="relative w-full h-full flex items-center justify-center">
+                        <img
+                          src={fileObj.preview}
+                          alt="Preview"
+                          className="max-h-full max-w-full rounded-lg object-contain shadow-md"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Side: Extracted Content View */}
+                  <div className="flex-1 flex flex-col h-full overflow-hidden p-6 bg-[var(--bg-card)]">
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className="text-xs font-bold uppercase tracking-wider text-[var(--accent)] px-2 py-1 rounded bg-[var(--accent)]/10">
+                        Extracted Text
+                      </span>
+                      {fileObj.status === 'pending' && (
+                        <span className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--accent)]" />
+                          Extracting...
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto rounded-xl bg-[var(--bg-dark)]/50 border border-[var(--border)] p-4 text-sm font-mono text-[var(--text-secondary)] leading-relaxed select-text min-h-[150px]">
+                      {fileObj.status === 'pending' ? (
+                        <div className="flex flex-col items-center justify-center h-full text-center text-xs text-[var(--text-secondary)] gap-2">
+                          <Loader2 className="h-6 w-6 animate-spin text-[var(--accent)]" />
+                          <p>Extracting text from document...</p>
+                        </div>
+                      ) : fileObj.status === 'no_text' || !fileObj.text ? (
+                        <div className="flex flex-col items-center justify-center h-full text-center text-xs text-[var(--text-secondary)]">
+                          <p>No readable text could be found or extracted.</p>
+                        </div>
+                      ) : (
+                        <pre className="whitespace-pre-wrap font-sans text-sm text-[var(--text-primary)]">
+                          {fileObj.text}
+                        </pre>
+                      )}
+                    </div>
+
+                    {fileObj.text && (
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(fileObj.text);
+                          }}
+                          className="text-xs font-semibold text-[var(--accent)] hover:underline"
+                        >
+                          Copy text to clipboard
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              </motion.div>
+            );
+          })()}
+        </AnimatePresence>,
+        document.body
+      )}
+
+      {/* Hidden file input — images and PDFs */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,application/pdf"
         multiple
         className="hidden"
         onChange={handleFileChange}
       />
 
-      {/* Image thumbnail strip — only shown when images are attached */}
+      {/* File thumbnail strip — only shown when files are attached */}
       <AnimatePresence>
         {images.length > 0 && (
           <motion.div
@@ -168,47 +290,68 @@ export default function InputBar({
             className="mx-auto max-w-3xl px-3 pt-3 md:px-4"
           >
             <div className="flex flex-wrap gap-2">
-              {images.map((img, idx) => (
-                <motion.div
-                  key={idx}
-                  initial={{ opacity: 0, scale: 0.85 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.85 }}
-                  className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-[var(--border)]"
-                >
-                  <img
-                    src={img.preview}
-                    alt="attachment"
-                    className="h-full w-full object-cover"
-                  />
-
-                  {/* OCR pending spinner overlay */}
-                  {img.status === 'pending' && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                      <Loader2 className="h-5 w-5 animate-spin text-white" />
-                    </div>
-                  )}
-
-                  {/* No readable text warning */}
-                  {img.status === 'no_text' && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-red-900/70">
-                      <span className="text-center text-[9px] font-medium leading-tight text-red-200">
-                        No text
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Remove button */}
-                  <button
-                    type="button"
-                    onClick={() => onRemoveImage?.(idx)}
-                    className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white shadow"
-                    aria-label="Remove image"
+              {images.map((img, idx) => {
+                const isPdf = img.file.type === 'application/pdf';
+                return (
+                  <motion.div
+                    key={img.id || idx}
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.85 }}
+                    onClick={() => setPreviewedFileIndex(idx)}
+                    className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-dark)] cursor-pointer flex items-center justify-center hover:border-[var(--accent)]/50 transition-colors"
                   >
-                    <X size={10} />
-                  </button>
-                </motion.div>
-              ))}
+                    {isPdf ? (
+                      <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-red-500/5 border border-red-500/10 rounded-xl">
+                        <FileText className="h-6 w-6 text-red-500" />
+                        <span className="mt-1 text-[8px] font-semibold text-red-400 truncate w-full max-w-[48px]">
+                          PDF
+                        </span>
+                      </div>
+                    ) : (
+                      <img
+                        src={img.preview}
+                        alt="attachment"
+                        className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                      />
+                    )}
+
+                    {/* Eye / Preview icon overlay on hover */}
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      <Eye className="h-4 w-4 text-white" />
+                    </div>
+
+                    {/* OCR pending spinner overlay */}
+                    {img.status === 'pending' && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-10">
+                        <Loader2 className="h-5 w-5 animate-spin text-white" />
+                      </div>
+                    )}
+
+                    {/* No readable text warning */}
+                    {img.status === 'no_text' && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-red-900/70 z-10">
+                        <span className="text-center text-[9px] font-medium leading-tight text-red-200">
+                          No text
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Remove button */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveImage(idx);
+                      }}
+                      className="absolute right-1 top-1 z-20 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white shadow hover:bg-red-600 transition-colors"
+                      aria-label="Remove image"
+                    >
+                      <X size={8} />
+                    </button>
+                  </motion.div>
+                );
+              })}
             </div>
           </motion.div>
         )}
@@ -224,7 +367,7 @@ export default function InputBar({
               disabled={disabled || inputLockedByPayment || isRecording || isTranscribing}
               onClick={openFilePicker}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--text-secondary)] transition hover:text-[var(--accent)] disabled:opacity-40"
-              aria-label="Attach image"
+              aria-label="Attach file"
             >
               <Paperclip className="h-5 w-5" />
             </motion.button>
